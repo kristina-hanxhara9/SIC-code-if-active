@@ -244,7 +244,7 @@ def fix_match_columns(row_dict):
 # Main
 # ---------------------------------------------------------------------------
 def main():
-    input_file = sys.argv[1] if len(sys.argv) > 1 else "companies_house_results_strict.xlsx"
+    input_file = sys.argv[1] if len(sys.argv) > 1 else "companies_house_results.xlsx"
     output_file = "companies_house_results_fixed.xlsx"
 
     if not API_KEY or API_KEY == "your_api_key_here":
