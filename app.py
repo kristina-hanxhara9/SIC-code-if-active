@@ -605,19 +605,34 @@ with upload_tab:
             st.warning("The uploaded file is empty.")
             st.stop()
 
-        column = st.selectbox("Select the column containing company names", options=df.columns.tolist())
+        cols = df.columns.tolist()
+        col_name_sel, col_pc_sel = st.columns(2)
+        with col_name_sel:
+            name_column = st.selectbox("Column with company names", options=cols)
+        with col_pc_sel:
+            postcode_column = st.selectbox("Column with postcodes", options=["(none)"] + cols)
 
         if st.button("Search All Companies", type="primary", key="batch_search"):
-            names = df[column].dropna().astype(str).unique().tolist()
-            if not names:
+            # Build list of (name, postcode) pairs
+            rows = df[[name_column]].copy()
+            rows["_name"] = rows[name_column].astype(str).str.strip()
+            if postcode_column != "(none)":
+                rows["_pc"] = df[postcode_column].fillna("").astype(str).str.strip()
+            else:
+                rows["_pc"] = ""
+            rows = rows[rows["_name"].ne("") & rows["_name"].ne("nan")]
+            # Deduplicate by name+postcode
+            pairs = rows[["_name", "_pc"]].drop_duplicates().values.tolist()
+
+            if not pairs:
                 st.warning("No company names found in the selected column.")
                 st.stop()
 
-            st.info(f"Searching for {len(names)} companies...")
+            st.info(f"Searching for {len(pairs)} companies...")
             progress = st.progress(0)
 
-            for i, name in enumerate(names):
-                progress.progress((i + 1) / len(names), text=f"Searching {i + 1}/{len(names)}: {name}")
+            for i, (name, pc) in enumerate(pairs):
+                progress.progress((i + 1) / len(pairs), text=f"Searching {i + 1}/{len(pairs)}: {name}")
                 try:
                     results = search_companies(name)
                 except requests.exceptions.HTTPError as e:
@@ -641,14 +656,33 @@ with upload_tab:
                     st.warning(f"No results for '{name}'")
                     continue
 
-                # Show only the top result for each name
+                # Filter by postcode if provided
+                if pc:
+                    matched = [item for item in items if matches_postcode(item, pc)]
+                    if not matched:
+                        st.warning(f"No postcode match for '{name}' with '{pc}'. Showing top result.")
+                        matched = items[:1]
+                    items = matched
+
+                # Chain detection: count how many active companies share the same name
+                active_items = [
+                    item for item in results.get("items", [])
+                    if item.get("company_status", "").lower() == "active"
+                    and item.get("title", "").upper() == name.upper()
+                ]
+                is_chain = len(active_items) > 1
+                chain_tag = f" \U0001f517 CHAIN ({len(active_items)} locations)" if is_chain else ""
+
+                # Show the best match
                 top = items[0]
                 company_number = top.get("company_number", "")
                 title = top.get("title", "Unknown")
                 status = top.get("company_status", "unknown")
                 ni_tag = " \U0001f534 NI" if is_northern_ireland(top.get("address", {})) else ""
 
-                with st.expander(f"{title} — {company_number} ({status.upper()}){ni_tag}"):
+                with st.expander(f"{title} — {company_number} ({status.upper()}){ni_tag}{chain_tag}"):
+                    if is_chain:
+                        st.info(f"Possible chain: {len(active_items)} active companies found with this name.")
                     with st.spinner("Loading full profile..."):
                         try:
                             profile = get_company_profile(company_number)
@@ -660,4 +694,4 @@ with upload_tab:
                 time.sleep(0.3)
 
             progress.empty()
-            st.success(f"Finished searching {len(names)} companies.")
+            st.success(f"Finished searching {len(pairs)} companies.")
