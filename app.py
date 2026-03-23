@@ -59,9 +59,28 @@ def matches_postcode(company_data, postcode):
     return search_postcode in company_postcode or company_postcode in search_postcode
 
 
+def is_northern_ireland(addr):
+    """Check if an address is in Northern Ireland."""
+    if not addr:
+        return False
+    country = (addr.get("country", "") or "").upper()
+    region = (addr.get("region", "") or "").upper()
+    postcode = (addr.get("postal_code", "") or "").replace(" ", "").upper()
+    return (
+        "NORTHERN IRELAND" in country
+        or "NORTHERN IRELAND" in region
+        or postcode.startswith("BT")
+    )
+
+
 def display_company_profile(profile):
     """Display all available company information."""
     st.subheader(profile.get("company_name", "Unknown"))
+
+    # Northern Ireland flag
+    reg_addr = profile.get("registered_office_address", {})
+    if is_northern_ireland(reg_addr):
+        st.error("Northern Ireland Address")
 
     # Status
     status = profile.get("company_status", "Unknown")
@@ -557,8 +576,9 @@ if st.button("Search", type="primary") and company_name:
         company_number = item.get("company_number", "")
         title = item.get("title", "Unknown")
         status = item.get("company_status", "unknown")
+        ni_tag = " \U0001f534 NI" if is_northern_ireland(item.get("address", {})) else ""
 
-        with st.expander(f"{title} — {company_number} ({status.upper()})"):
+        with st.expander(f"{title} — {company_number} ({status.upper()}){ni_tag}"):
             with st.spinner("Loading full profile..."):
                 try:
                     profile = get_company_profile(company_number)
