@@ -1,3 +1,4 @@
+import io
 import os
 import time
 
@@ -630,6 +631,7 @@ with upload_tab:
 
             st.info(f"Searching for {len(pairs)} companies...")
             progress = st.progress(0)
+            export_rows = []
 
             for i, (name, pc) in enumerate(pairs):
                 progress.progress((i + 1) / len(pairs), text=f"Searching {i + 1}/{len(pairs)}: {name}")
@@ -642,26 +644,32 @@ with upload_tab:
                         try:
                             results = search_companies(name)
                         except Exception:
+                            export_rows.append({"Search Name": name, "Search Postcode": pc, "Error": "Rate limited"})
                             st.error(f"Failed to search for '{name}' after retry.")
                             continue
                     else:
+                        export_rows.append({"Search Name": name, "Search Postcode": pc, "Error": f"HTTP {e.response.status_code}"})
                         st.error(f"API error searching '{name}': {e.response.status_code}")
                         continue
                 except requests.exceptions.RequestException as e:
+                    export_rows.append({"Search Name": name, "Search Postcode": pc, "Error": str(e)})
                     st.error(f"Request failed for '{name}': {e}")
                     continue
 
                 items = results.get("items", [])
                 if not items:
+                    export_rows.append({"Search Name": name, "Search Postcode": pc, "Error": "No results"})
                     st.warning(f"No results for '{name}'")
                     continue
 
                 # Filter by postcode if provided
+                postcode_matched = True
                 if pc:
                     matched = [item for item in items if matches_postcode(item, pc)]
                     if not matched:
                         st.warning(f"No postcode match for '{name}' with '{pc}'. Showing top result.")
                         matched = items[:1]
+                        postcode_matched = False
                     items = matched
 
                 # Chain detection: count how many active companies share the same name
@@ -680,6 +688,8 @@ with upload_tab:
                 status = top.get("company_status", "unknown")
                 ni_tag = " \U0001f534 NI" if is_northern_ireland(top.get("address", {})) else ""
 
+                # Fetch full profile for SIC codes
+                profile = None
                 with st.expander(f"{title} — {company_number} ({status.upper()}){ni_tag}{chain_tag}"):
                     if is_chain:
                         st.info(f"Possible chain: {len(active_items)} active companies found with this name.")
@@ -690,8 +700,42 @@ with upload_tab:
                         except requests.exceptions.RequestException as e:
                             st.error(f"Could not load profile for {company_number}: {e}")
 
+                # Build export row
+                sic_codes = profile.get("sic_codes", []) if profile else []
+                sic_descriptions = [SIC_DESCRIPTIONS.get(c, "Unknown") for c in sic_codes]
+                reg_addr = profile.get("registered_office_address", {}) if profile else {}
+
+                export_rows.append({
+                    "Search Name": name,
+                    "Search Postcode": pc,
+                    "Company Name": title,
+                    "Company Number": company_number,
+                    "Status": status.upper(),
+                    "Postcode Match": "Yes" if postcode_matched else "No",
+                    "Chain": "Yes" if is_chain else "No",
+                    "Chain Locations": len(active_items) if is_chain else "",
+                    "SIC Codes": ", ".join(sic_codes),
+                    "SIC Descriptions": ", ".join(sic_descriptions),
+                    "Registered Address": format_address(reg_addr),
+                    "Northern Ireland": "Yes" if is_northern_ireland(reg_addr) else "No",
+                })
+
                 # Small delay to avoid hitting rate limits
                 time.sleep(0.3)
 
             progress.empty()
             st.success(f"Finished searching {len(pairs)} companies.")
+
+            # Export to Excel
+            if export_rows:
+                export_df = pd.DataFrame(export_rows)
+                st.dataframe(export_df, use_container_width=True)
+                buffer = io.BytesIO()
+                export_df.to_excel(buffer, index=False, engine="openpyxl")
+                buffer.seek(0)
+                st.download_button(
+                    label="Download Results as Excel",
+                    data=buffer,
+                    file_name="companies_house_results.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
