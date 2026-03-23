@@ -1,5 +1,7 @@
 import os
+import time
 
+import pandas as pd
 import requests
 import streamlit as st
 from dotenv import load_dotenv
@@ -535,53 +537,127 @@ if not API_KEY or API_KEY == "your_api_key_here":
     )
     st.stop()
 
-col_name, col_postcode = st.columns([3, 1])
-with col_name:
-    company_name = st.text_input("Company Name", placeholder="e.g. Tesco")
-with col_postcode:
-    postcode = st.text_input("Postcode (optional filter)", placeholder="e.g. AL1 1AB")
+search_tab, upload_tab = st.tabs(["Single Search", "Excel Batch Search"])
 
-if st.button("Search", type="primary") and company_name:
-    with st.spinner("Searching Companies House..."):
-        try:
-            results = search_companies(company_name)
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 401:
-                st.error("Invalid API key. Please check your `.env` file.")
+with search_tab:
+    col_name, col_postcode = st.columns([3, 1])
+    with col_name:
+        company_name = st.text_input("Company Name", placeholder="e.g. Tesco")
+    with col_postcode:
+        postcode = st.text_input("Postcode (optional filter)", placeholder="e.g. AL1 1AB")
+
+    if st.button("Search", type="primary", key="single_search") and company_name:
+        with st.spinner("Searching Companies House..."):
+            try:
+                results = search_companies(company_name)
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 401:
+                    st.error("Invalid API key. Please check your `.env` file.")
+                else:
+                    st.error(f"API error: {e.response.status_code} — {e.response.text}")
+                st.stop()
+            except requests.exceptions.RequestException as e:
+                st.error(f"Request failed: {e}")
+                st.stop()
+
+        items = results.get("items", [])
+        if not items:
+            st.warning("No companies found for that search.")
+            st.stop()
+
+        # Filter by postcode if provided
+        if postcode:
+            filtered = [item for item in items if matches_postcode(item, postcode)]
+            if not filtered:
+                st.warning(f"Found {len(items)} companies but none match postcode '{postcode}'. Showing all results.")
+                filtered = items
             else:
-                st.error(f"API error: {e.response.status_code} — {e.response.text}")
+                st.info(f"Showing {len(filtered)} of {len(items)} results matching postcode '{postcode}'.")
+            items = filtered
+
+        st.markdown(f"### Found {len(items)} company/companies")
+
+        for item in items:
+            company_number = item.get("company_number", "")
+            title = item.get("title", "Unknown")
+            status = item.get("company_status", "unknown")
+            ni_tag = " \U0001f534 NI" if is_northern_ireland(item.get("address", {})) else ""
+
+            with st.expander(f"{title} — {company_number} ({status.upper()}){ni_tag}"):
+                with st.spinner("Loading full profile..."):
+                    try:
+                        profile = get_company_profile(company_number)
+                        display_company_profile(profile)
+                    except requests.exceptions.RequestException as e:
+                        st.error(f"Could not load profile for {company_number}: {e}")
+
+with upload_tab:
+    uploaded_file = st.file_uploader("Upload an Excel file with company names", type=["xlsx", "xls"])
+
+    if uploaded_file is not None:
+        try:
+            df = pd.read_excel(uploaded_file)
+        except Exception as e:
+            st.error(f"Could not read Excel file: {e}")
             st.stop()
-        except requests.exceptions.RequestException as e:
-            st.error(f"Request failed: {e}")
+
+        if df.empty:
+            st.warning("The uploaded file is empty.")
             st.stop()
 
-    items = results.get("items", [])
-    if not items:
-        st.warning("No companies found for that search.")
-        st.stop()
+        column = st.selectbox("Select the column containing company names", options=df.columns.tolist())
 
-    # Filter by postcode if provided
-    if postcode:
-        filtered = [item for item in items if matches_postcode(item, postcode)]
-        if not filtered:
-            st.warning(f"Found {len(items)} companies but none match postcode '{postcode}'. Showing all results.")
-            filtered = items
-        else:
-            st.info(f"Showing {len(filtered)} of {len(items)} results matching postcode '{postcode}'.")
-        items = filtered
+        if st.button("Search All Companies", type="primary", key="batch_search"):
+            names = df[column].dropna().astype(str).unique().tolist()
+            if not names:
+                st.warning("No company names found in the selected column.")
+                st.stop()
 
-    st.markdown(f"### Found {len(items)} company/companies")
+            st.info(f"Searching for {len(names)} companies...")
+            progress = st.progress(0)
 
-    for item in items:
-        company_number = item.get("company_number", "")
-        title = item.get("title", "Unknown")
-        status = item.get("company_status", "unknown")
-        ni_tag = " \U0001f534 NI" if is_northern_ireland(item.get("address", {})) else ""
-
-        with st.expander(f"{title} — {company_number} ({status.upper()}){ni_tag}"):
-            with st.spinner("Loading full profile..."):
+            for i, name in enumerate(names):
+                progress.progress((i + 1) / len(names), text=f"Searching {i + 1}/{len(names)}: {name}")
                 try:
-                    profile = get_company_profile(company_number)
-                    display_company_profile(profile)
+                    results = search_companies(name)
+                except requests.exceptions.HTTPError as e:
+                    if e.response.status_code == 429:
+                        st.warning(f"Rate limited. Waiting before retrying '{name}'...")
+                        time.sleep(5)
+                        try:
+                            results = search_companies(name)
+                        except Exception:
+                            st.error(f"Failed to search for '{name}' after retry.")
+                            continue
+                    else:
+                        st.error(f"API error searching '{name}': {e.response.status_code}")
+                        continue
                 except requests.exceptions.RequestException as e:
-                    st.error(f"Could not load profile for {company_number}: {e}")
+                    st.error(f"Request failed for '{name}': {e}")
+                    continue
+
+                items = results.get("items", [])
+                if not items:
+                    st.warning(f"No results for '{name}'")
+                    continue
+
+                # Show only the top result for each name
+                top = items[0]
+                company_number = top.get("company_number", "")
+                title = top.get("title", "Unknown")
+                status = top.get("company_status", "unknown")
+                ni_tag = " \U0001f534 NI" if is_northern_ireland(top.get("address", {})) else ""
+
+                with st.expander(f"{title} — {company_number} ({status.upper()}){ni_tag}"):
+                    with st.spinner("Loading full profile..."):
+                        try:
+                            profile = get_company_profile(company_number)
+                            display_company_profile(profile)
+                        except requests.exceptions.RequestException as e:
+                            st.error(f"Could not load profile for {company_number}: {e}")
+
+                # Small delay to avoid hitting rate limits
+                time.sleep(0.3)
+
+            progress.empty()
+            st.success(f"Finished searching {len(names)} companies.")
