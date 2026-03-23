@@ -219,7 +219,10 @@ def needs_research(row):
 
 
 def fix_sic_descriptions(row_dict):
-    """Fix SIC descriptions for ANY row using the full CSV — no API needed."""
+    """Fix SIC descriptions ONLY if any are 'Unknown' — leave the rest alone."""
+    sic_descs = str(row_dict.get("SIC Descriptions", ""))
+    if "Unknown" not in sic_descs:
+        return row_dict
     sic_codes_str = str(row_dict.get("SIC Codes", ""))
     if sic_codes_str and sic_codes_str != "nan":
         codes = [c.strip() for c in sic_codes_str.split(",") if c.strip()]
