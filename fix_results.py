@@ -270,13 +270,13 @@ def main():
 
     # Re-search the problem rows
     fix_rows = []
-    for idx, (_, row) in enumerate(to_fix.iterrows()):
+    for idx, (_, row) in enumerate(to_research.iterrows()):
         name = str(row.get("Search Name", "")).strip()
         pc = str(row.get("Search Postcode", "")).strip()
         if pc == "nan":
             pc = ""
 
-        print(f"\n  [{idx+1}/{len(to_fix)}] Re-searching: {name}" + (f" ({pc})" if pc else ""))
+        print(f"\n  [{idx+1}/{len(to_research)}] Re-searching: {name}" + (f" ({pc})" if pc else ""))
 
         try:
             results = search_companies(name)
