@@ -208,19 +208,33 @@ def build_row(name, pc, chosen, match_type, items):
 
 
 # ---------------------------------------------------------------------------
-# Determine which rows need re-searching
+# Determine which rows need RE-SEARCHING via the API
+# (only rows where the company wasn't found at all)
 # ---------------------------------------------------------------------------
-def needs_fix(row):
+def needs_research(row):
     mt = str(row.get("Match Type", "")).upper()
-    sic_desc = str(row.get("SIC Descriptions", ""))
-    # Re-search if: no match, error, unknown SIC, or only postcode matched (not name)
     if mt in ("NO MATCH", "NO RESULTS", "ERROR"):
         return True
-    if "Unknown" in sic_desc or "unknown" in sic_desc:
-        return True
-    if mt == "POSTCODE ONLY":
-        return True
     return False
+
+
+def fix_sic_descriptions(row_dict):
+    """Fix SIC descriptions for ANY row using the full CSV — no API needed."""
+    sic_codes_str = str(row_dict.get("SIC Codes", ""))
+    if sic_codes_str and sic_codes_str != "nan":
+        codes = [c.strip() for c in sic_codes_str.split(",") if c.strip()]
+        row_dict["SIC Descriptions"] = ", ".join(sic_description(c) for c in codes)
+    return row_dict
+
+
+def fix_match_columns(row_dict):
+    """Ensure Postcode Match / Name Match columns exist."""
+    mt = str(row_dict.get("Match Type", "")).upper()
+    if "Postcode Match" not in row_dict or str(row_dict.get("Postcode Match", "")) == "nan":
+        row_dict["Postcode Match"] = "Yes" if "POSTCODE" in mt else "No"
+    if "Name Match" not in row_dict or str(row_dict.get("Name Match", "")) == "nan":
+        row_dict["Name Match"] = "Yes" if "NAME" in mt else "No"
+    return row_dict
 
 
 # ---------------------------------------------------------------------------
@@ -238,25 +252,17 @@ def main():
     df = pd.read_excel(input_file)
     print(f"  {len(df)} total rows")
 
-    to_fix = df[df.apply(needs_fix, axis=1)]
-    already_good = df[~df.apply(needs_fix, axis=1)]
-    print(f"  {len(to_fix)} rows need fixing")
-    print(f"  {len(already_good)} rows already good")
+    to_research = df[df.apply(needs_research, axis=1)]
+    already_found = df[~df.apply(needs_research, axis=1)]
+    print(f"  {len(to_research)} rows need re-searching (NO MATCH / ERROR)")
+    print(f"  {len(already_found)} rows already have a company — fixing SIC descriptions")
 
-    # Re-build the good rows with updated SIC descriptions from the full CSV
+    # Fix ALL already-found rows: update SIC descriptions + match columns
     good_rows = []
-    for _, row in already_good.iterrows():
+    for _, row in already_found.iterrows():
         r = row.to_dict()
-        # Fix SIC descriptions using full CSV
-        sic_codes_str = str(r.get("SIC Codes", ""))
-        if sic_codes_str and sic_codes_str != "nan":
-            codes = [c.strip() for c in sic_codes_str.split(",") if c.strip()]
-            r["SIC Descriptions"] = ", ".join(sic_description(c) for c in codes)
-        # Add Postcode Match / Name Match columns if missing
-        if "Postcode Match" not in r:
-            mt = str(r.get("Match Type", "")).upper()
-            r["Postcode Match"] = "Yes" if "POSTCODE" in mt else "No"
-            r["Name Match"] = "Yes" if "NAME" in mt else "No"
+        r = fix_sic_descriptions(r)
+        r = fix_match_columns(r)
         good_rows.append(r)
 
     # Re-search the problem rows
