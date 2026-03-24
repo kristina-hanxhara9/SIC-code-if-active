@@ -61,6 +61,14 @@ def fuzzy_match(search_name, alt_name):
     if a in b or b in a:
         return True
 
+    # Compare with all spaces removed (catches "ams car care" vs "amscar care")
+    a_nospace = a.replace(" ", "")
+    b_nospace = b.replace(" ", "")
+    if a_nospace == b_nospace:
+        return True
+    if a_nospace in b_nospace or b_nospace in a_nospace:
+        return True
+
     # Word-level matching
     words_a = get_words(search_name)
     words_b = get_words(alt_name)
